@@ -24,7 +24,7 @@
 
 #include <string.h>
 #include <stdio.h>
-#include "task_manager.h"
+#include "display.h"
 #include "ili9341_gfx.h"
 #include "stm32l4xx_ll_lptim.h"
 
@@ -87,7 +87,7 @@ void handle_rotary_encoder_turn() {
     last_rotation_check = HAL_GetTick();
     uint32_t cnt = hlptim1.Instance->CNT;
     if (old_cnt != cnt) {
-      task_handle_rotary_change(old_cnt - cnt);
+      display_handle_rotary_change(old_cnt - cnt);
       old_cnt = cnt;
     }
   }
@@ -139,7 +139,8 @@ int main(void)
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
 
-  init_tasks(&hspi1, &htim16, &hadc1, &hdac1);
+  init_display(&hspi1, &htim16, &hadc1, &hdac1);
+  HAL_TIM_Base_Start_IT(&htim16);
 
   /* Start LPTIM Encoder mode */
   if(HAL_OK != HAL_LPTIM_Encoder_Start_IT(&hlptim1, 0x8000))
@@ -157,7 +158,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1) {
     handle_rotary_encoder_turn();
-    manage_tasks();
+    display_graph();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -512,7 +513,7 @@ static void MX_TIM7_Init(void)
   htim7.Instance = TIM7;
   htim7.Init.Prescaler = 3200 - 1;
   htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim7.Init.Period = 20000 - 1;
+  htim7.Init.Period = 30000 - 1;
   htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
   {
@@ -667,7 +668,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 void handle_interrupt(uint8_t interrupt_event) {
-  task_handle_interrupt(interrupt_event);
+  display_handle_interrupt(interrupt_event);
 }
 
 /* USER CODE END 4 */

@@ -287,39 +287,19 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* squared_deri
     // y(nT) = 2y(nT - T) - y(nT - 2T) + x(nT) - 2x(nT - 6T) + x(nT - 12T)
     // Can be removed if your signal was previously filtered, or replaced by a different filter.
     lowpass[array_index] = dcblock[array_index];
-//    if (current_index >= 1) {
-//      lowpass[array_index] += lowpass[MOD_INDEX(array_index - 1l)] << 1;
-//    }
-//    if (current_index >= 2) {
-//      lowpass[array_index] -= lowpass[MOD_INDEX(array_index - 2l)];
-//    }
-//    if (current_index >= 6) {
-//      lowpass[array_index] -= dcblock[MOD_INDEX(array_index - 6l)] << 1;
-//    }
-//    if (current_index >= 12) {
-//      lowpass[array_index] += dcblock[MOD_INDEX(array_index - 12l)];
-//    }
-//    if (current_index >= 12) {
-      lowpass[array_index] += 2 * lowpass[MOD_INDEX(array_index - 1)];
-      lowpass[array_index] -= lowpass[MOD_INDEX(array_index - 2)];
-      lowpass[array_index] -= 2 * dcblock[MOD_INDEX(array_index - 6)];
-      lowpass[array_index] += dcblock[MOD_INDEX(array_index - 12)];
-//    }
+    lowpass[array_index] += 2 * lowpass[MOD_INDEX(array_index - 1)];
+    lowpass[array_index] -= lowpass[MOD_INDEX(array_index - 2)];
+    lowpass[array_index] -= 2 * dcblock[MOD_INDEX(array_index - 6)];
+    lowpass[array_index] += dcblock[MOD_INDEX(array_index - 12)];
 
     // High Pass filter
     // Implemented as proposed by the original paper.
     // y(nT) = 32x(nT - 16T) - [y(nT - T) + x(nT) - x(nT - 32T)]
     // Can be removed if your signal was previously filtered, or replaced by a different filter.
 //    highpass[array_index] = -lowpass[array_index];
-//    if (current_index >= 1) {
-//      highpass[array_index] -= highpass[MOD_INDEX(array_index - 1)];
-//    }
-//    if (current_index >= 16) {
-//      highpass[array_index] += 32 * lowpass[MOD_INDEX(array_index - 16)];
-//    }
-//    if (current_index >= 32) {
-//      highpass[array_index] += lowpass[MOD_INDEX(array_index - 32)];
-//    }
+//    highpass[array_index] -= highpass[MOD_INDEX(array_index - 1)];
+//    highpass[array_index] += 32 * lowpass[MOD_INDEX(array_index - 16)];
+//    highpass[array_index] += lowpass[MOD_INDEX(array_index - 32)];
 
     filtered[array_index] = highpass[array_index];
 

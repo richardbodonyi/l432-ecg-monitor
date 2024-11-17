@@ -294,7 +294,7 @@ void LPTIM1_IRQHandler(void)
 
 //  uint32_t cnt = hlptim1.Instance->CNT;
 //  if (old_cnt != cnt) {
-//    task_handle_rotary_change(old_cnt - cnt);
+//    display_handle_rotary_change(old_cnt - cnt);
 //    old_cnt = cnt;
 //  }
 

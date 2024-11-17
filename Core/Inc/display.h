@@ -2,6 +2,10 @@
 #ifndef INC_DISPLAY_H_
 #define INC_DISPLAY_H_
 
+#define BUTTON_PRESS 0
+#define RIGHT_TURN 1
+#define LEFT_TURN 2
+
 void init_display(SPI_HandleTypeDef* spi,
     TIM_HandleTypeDef* timer,
     ADC_HandleTypeDef* adc,

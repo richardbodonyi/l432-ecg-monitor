@@ -32,7 +32,7 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include "task_manager.h"
+#include "display.h"
 
 /* USER CODE END Includes */
 
