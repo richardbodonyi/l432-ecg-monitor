@@ -220,7 +220,7 @@ void EXTI0_IRQHandler(void)
     // if button is up, send BUTTON_PRESS event
     // stop timer
     HAL_TIM_Base_Stop_IT(&htim7);
-    handle_interrupt(BUTTON_PRESS);
+    handle_button_press();
   }
   /* USER CODE END EXTI0_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(BUTTON_Pin);
@@ -277,7 +277,7 @@ void TIM1_UP_TIM16_IRQHandler(void)
 void TIM7_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM7_IRQn 0 */
-  // shutdown();
+  display_shutdown();
   /* USER CODE END TIM7_IRQn 0 */
   HAL_TIM_IRQHandler(&htim7);
   /* USER CODE BEGIN TIM7_IRQn 1 */

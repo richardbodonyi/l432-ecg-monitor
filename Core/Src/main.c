@@ -667,8 +667,8 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void handle_interrupt(uint8_t interrupt_event) {
-  display_handle_interrupt(interrupt_event);
+void handle_button_press() {
+  display_handle_button_press();
 }
 
 /* USER CODE END 4 */

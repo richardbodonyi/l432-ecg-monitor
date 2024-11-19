@@ -56,7 +56,7 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 
-void handle_interrupt(uint8_t interrupt_event);
+void handle_button_press();
 
 /* USER CODE END EFP */
 
