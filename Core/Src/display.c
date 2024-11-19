@@ -12,6 +12,8 @@
 
 #define MOD_INDEX(x) ((x + BUFFER_SIZE) % BUFFER_SIZE)
 
+#define RR_TO_PULSE(x) (60 * 200 / x)
+
 #define MAX_HEIGHT 239
 
 #define MENU_ITEM_PAUSE 0
@@ -259,7 +261,7 @@ void display_graph() {
         }
 
         if (result.rr_average > 0) {
-          print_pulse(200 / (float) result.rr_average);
+          print_pulse(RR_TO_PULSE((float) result.rr_average));
         }
       }
       current_index++;

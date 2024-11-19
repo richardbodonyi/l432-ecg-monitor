@@ -414,7 +414,6 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
 
         result->is_qrs = false;
         result->is_noise_peak = true;
-//        return;
       }
     }
 
@@ -463,102 +462,111 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
     result->is_regular = regular;
   }
   // If no R-peak was detected, it's important to check how long it's been since the last detection.
-//  else {
-//    // TODO erre nem kerülhet sor, csak előre keresünk
-//
-//    // If no R-peak was detected for too long, use the lighter thresholds and do a back search.
-//    // However, the back search must respect the 200ms limit and the 360ms one (check the slope).
-//    if (sample > (lastQRS + DELAY_200ms_IN_SAMPLES)) {
-//      for (k = lastQRS - 1 + DELAY_200ms_IN_SAMPLES; k < current_index; k++) {
-//        i = MOD_INDEX(k);
-//        if ((integral[i] > threshold_i2) && highpass[i] > threshold_f1) {
-//          peak_i = integral[i];
-//          signalpeak_i = 0.25 * peak_i + 0.75 * signalpeak_i; // 0.25 *
-//          threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i); // 0.25 *
-//          threshold_i2 = 0.5 * threshold_i1; // 0.5 *
-//          lastSlope = currentSlope;
-//          // If a signal peak was detected on the back search, the RR attributes must be updated.
-//          // This is the same thing done when a peak is detected on the first try.
-//          //RR Average 1
-//          rravg1 = 0;
-//          non_zero_rrs = 0;
-//          for (j = 0; j < 7; j++) {
-//            rr1[j] = rr1[j + 1];
-//            rravg1 += rr1[j];
-//          }
-//          rr1[7] = k - 1 - lastQRS;
-//          lastQRS = k - 1;
-//          rravg1 += rr1[7];
-//          rravg1 = rravg1 >> 3; // * 0.125
-//          result->is_qrs = true;
-//
-//          //RR Average 2
-//          if ((rr1[7] >= rrlow) && (rr1[7] <= rrhigh)) {
-//            rravg2 = 0;
-//            for (j = 0; j < 7; j++) {
-//              rr2[j] = rr2[j + 1];
-//              rravg2 += rr2[j];
-//            }
-//            rr2[7] = rr1[7];
-//            rravg2 += rr2[7];
-//            rravg2 = rravg2 >> 3; // * 0.125
-//            rrlow = 0.92 * rravg2;
-//            rrhigh = 1.16 * rravg2;
-//            rrmiss = 1.66 * rravg2;
-//          }
-//
-//          prevRegular = regular;
-//          if (rravg1 == rravg2) {
-//            regular = true;
-//          }
-//          else {
-//            regular = false;
-//            if (prevRegular) {
-//              threshold_i1 = 0.5 * threshold_i1; // 0.5 *
-//            }
-//          }
-//          break;
-//        }
-//      }
-//      if (result->is_qrs) {
-//        result->is_regular = regular;
-//        result->rr_average = rravg1;
-//      }
-//    }
+  else {
+    // If no R-peak was detected for too long, use the lighter thresholds and do a back search.
+    // However, the back search must respect the 200ms limit and the 360ms one (check the slope).
+    if (false && sample > (lastQRS + DELAY_200ms_IN_SAMPLES)) {
+      for (k = lastQRS - 1 + DELAY_200ms_IN_SAMPLES; k < current_index; k++) {
+        i = MOD_INDEX(k);
+        if ((integral[i] > threshold_i2) && highpass[i] > threshold_f1) {
+          currentSlope = 0;
+          for (j = i - 10; j <= i; j++) {
+            if (squared_derivative[MOD_INDEX(j)] > currentSlope) {
+                currentSlope = squared_derivative[MOD_INDEX(j)];
+            }
+          }
+          if ((currentSlope < (lastSlope / 2l)) && (i + sample) < (lastQRS + 0.36 * lastQRS)) { // TODO miért 2?
+              result->is_qrs = false;
+          }
+          else {
+            peak_i = integral[i];
+            signalpeak_i = 0.25 * peak_i + 0.75 * signalpeak_i; // 0.25 *
+            threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i); // 0.25 *
+            threshold_i2 = 0.5 * threshold_i1; // 0.5 *
+            lastSlope = currentSlope;
+            // If a signal peak was detected on the back search, the RR attributes must be updated.
+            // This is the same thing done when a peak is detected on the first try.
+            //RR Average 1
+            rravg1 = 0;
+            non_zero_rrs = 0;
+            for (j = 0; j < 7; j++) {
+              rr1[j] = rr1[j + 1];
+              rravg1 += rr1[j];
+            }
+            rr1[7] = k - 1 - lastQRS;
+            lastQRS = k - 1;
+            rravg1 += rr1[7];
+            rravg1 = rravg1 >> 3; // * 0.125
+            result->is_qrs = true;
+
+            //RR Average 2
+            if ((rr1[7] >= rrlow) && (rr1[7] <= rrhigh)) {
+              rravg2 = 0;
+              for (j = 0; j < 7; j++) {
+                rr2[j] = rr2[j + 1];
+                rravg2 += rr2[j];
+              }
+              rr2[7] = rr1[7];
+              rravg2 += rr2[7];
+              rravg2 = rravg2 >> 3; // * 0.125
+              rrlow = 0.92 * rravg2;
+              rrhigh = 1.16 * rravg2;
+              rrmiss = 1.66 * rravg2;
+            }
+
+            prevRegular = regular;
+            if (rravg1 == rravg2) {
+              regular = true;
+            }
+            else {
+              regular = false;
+              if (prevRegular) {
+                threshold_i1 = 0.5 * threshold_i1; // 0.5 *
+              }
+            }
+            break;
+          }
+        }
+      }
+      if (result->is_qrs) {
+        result->is_regular = regular;
+        result->rr_average = rravg1;
+      }
+    }
 
     // Definitely no signal peak was detected.
-//    if (!result->is_qrs) {
-//      // If some kind of peak had been detected, then it's certainly a noise peak. Thresholds must be updated accordingly.
-//      if (integral_value >= threshold_i1 || highpass_value >= threshold_f1) {
-//        peak_i = integral_value;
-//        noisepeak_i = 0.125 * peak_i + 0.875 * noisepeak_i;
-//        threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
-//        threshold_i2 = 0.5 * threshold_i1;
+    if (!result->is_qrs) {
+      // If some kind of peak had been detected, then it's certainly a noise peak. Thresholds must be updated accordingly.
+      if (integral_value >= threshold_i1 || highpass_value >= threshold_f1) {
+        peak_i = integral_value;
+        noisepeak_i = 0.125 * peak_i + 0.875 * noisepeak_i;
+        threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
+        threshold_i2 = 0.5 * threshold_i1;
 
-//        peak_f = highpass_value;
-//        noisepeak_f = 0.125 * peak_f + 0.875 * noisepeak_f;
-//        threshold_f1 = noisepeak_f + 0.25 * (signalpeak_f - noisepeak_f);
-//        threshold_f2 = 0.5 * threshold_f1;
-//      }
-//    }
-//  }
+        peak_f = highpass_value;
+        noisepeak_f = 0.125 * peak_f + 0.875 * noisepeak_f;
+        threshold_f1 = noisepeak_f + 0.25 * (signalpeak_f - noisepeak_f);
+        threshold_f2 = 0.5 * threshold_f1;
+      }
+    }
+  }
 
 
-//  if (!result->is_qrs) {
-//    // If some kind of peak had been detected, then it's certainly a noise peak. Thresholds must be updated accordingly.
-//    if ((integral_value >= threshold_i1) || (highpass_value >= threshold_f1)) {
-//      peak_i = integral_value;
-//      noisepeak_i = 0.125 * peak_i + 0.875 * noisepeak_i;
-//      threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
-//      threshold_i2 = 0.5 * threshold_i1;
-//      peak_f = highpass_value;
-//      noisepeak_f = 0.125 * peak_f + 0.875 * noisepeak_f;
-//      threshold_f1 = noisepeak_f + 0.25 * (signalpeak_f - noisepeak_f);
-//      threshold_f2 = 0.5 * threshold_f1;
-//      result->is_qrs = false;
-//      result->is_noise_peak = true;
-//    }
-//  }
+  if (!result->is_qrs) {
+    // If some kind of peak had been detected, then it's certainly a noise peak. Thresholds must be updated accordingly.
+    if ((integral_value >= threshold_i1) || (highpass_value >= threshold_f1)) {
+      peak_i = integral_value;
+      noisepeak_i = 0.125 * peak_i + 0.875 * noisepeak_i;
+      threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
+      threshold_i2 = 0.5 * threshold_i1;
+      peak_f = highpass_value;
+      noisepeak_f = 0.125 * peak_f + 0.875 * noisepeak_f;
+      threshold_f1 = noisepeak_f + 0.25 * (signalpeak_f - noisepeak_f);
+      threshold_f2 = 0.5 * threshold_f1;
+      result->is_qrs = false;
+      result->is_noise_peak = true;
+    }
+  }
 
   // The current_index implementation outputs '0' for every sample where no peak was detected,
   // and '1' for every sample where a peak was detected. It should be changed to fit
