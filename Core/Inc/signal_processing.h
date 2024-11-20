@@ -17,10 +17,11 @@ typedef struct {
   float thi1;
   bool is_qrs;
   uint16_t rr_average;
+  uint16_t rr_average2;
   bool is_regular;
-  uint16_t *rr_averages;
+  uint8_t evaluation;
 } pt_result_t;
 
-void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, uint32_t current_index, pt_result_t* result);
+void process_pan_tompkins(uint16_t* signal, float* filtered, uint32_t current_index, pt_result_t* result);
 
 #endif /* SIGNAL_PROCESSING_H_ */

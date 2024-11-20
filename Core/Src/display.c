@@ -12,7 +12,7 @@
 
 #define MOD_INDEX(x) ((x + BUFFER_SIZE) % BUFFER_SIZE)
 
-#define RR_TO_PULSE(x) (x != 0 ? (60 * 200 / x) : x)
+#define RR_TO_PULSE(x) ((uint16_t) (x != 0 ? (60 * 200 / x) : x))
 
 #define MAX_HEIGHT 239
 
@@ -26,18 +26,19 @@
 #define SEC_MOD 800
 #define HALF_SEC_MOD 400
 
-#define FILTERED_DC_SHIFT(X) ((X / 500) + 2000)
-#define DERIVATIVE_DC_SHIFT(X) ((X / 10000) + 1500)
-#define DC_SHIFT(X) ((X / 1000000) + 2000)
-
+#define FILTERED_DC_SHIFT(X) ((X / 200) + 2000)
+#
 #define GRAPH_Y1 50
 #define GRAPH_Y2 160
 
 #define MIN_Y 700
 #define MAX_Y 3000
 
-#define PULSE_X 10
+#define PULSE_X 200
 #define PULSE_Y 12
+
+#define EVALUATION_X 60
+#define EVALUATION_Y 12
 
 #define TEXT_COLOR ILI9341_LIGHTGREY
 #define TEXT_BACKGROUND ILI9341_BLACK
@@ -50,7 +51,7 @@
 
 #define MENU_SIZE 3
 
-char* EVALUATION_TEXTS[] = {"Normal", "Type1", "Type2"};
+char* EVALUATION_TEXTS[] = {"Nor", "Arr"};
 
 char* MENU_TEXTS[] = {"Szunet", "Hang", "Vissza"};
 
@@ -77,8 +78,6 @@ uint32_t time_buffer[BUFFER_SIZE] = {0};
 
 float filtered[BUFFER_SIZE] = {0};
 
-float integral[BUFFER_SIZE] = {0};
-
 uint32_t fill_index = 0;
 
 uint32_t current_index = 0;
@@ -87,7 +86,7 @@ pt_result_t result;
 
 uint8_t lcd_brightness = 130;
 
-bool active = false, enabled = true, paused = false;
+bool active = false, enabled = true, paused = false, initialized = false;
 
 T_Mode mode = MEASURE;
 
@@ -97,18 +96,7 @@ int16_t rotary_position = 0;
 
 const uint8_t MIN_BRIGHTNESS = 80, MAX_BRIGHTNESS = 250, BRIGHTNESS_STEP = 10;
 
-ili9341_text_attr_t MENU_TEXT_ATTR, PULSE_TEXT_ATTR;
-
-//void print_debug_info(uint32_t value) {
-//  ili9341_text_attr_t attr;
-//  attr.bg_color = TEXT_BACKGROUND;
-//  attr.fg_color = TEXT_COLOR;
-//  attr.font = &ili9341_font_11x18;
-//  attr.origin_x = 100;
-//  attr.origin_y = 12;
-//  sprintf(DEBUG_TEXT, "%ld", value);
-//  ili9341_draw_string(ili9341_lcd, attr, DEBUG_TEXT);
-//}
+ili9341_text_attr_t MENU_TEXT_ATTR, PULSE_TEXT_ATTR, EVALUATION_ATTR;
 
 void init_display(SPI_HandleTypeDef* spi,
     TIM_HandleTypeDef* timer,
@@ -151,26 +139,32 @@ void init_display(SPI_HandleTypeDef* spi,
   PULSE_TEXT_ATTR.origin_x = PULSE_X;
   PULSE_TEXT_ATTR.origin_y = PULSE_Y;
 
+  EVALUATION_ATTR.bg_color = TEXT_BACKGROUND;
+  EVALUATION_ATTR.fg_color = TEXT_COLOR;
+  EVALUATION_ATTR.font = &ili9341_font_11x18;
+  EVALUATION_ATTR.origin_x = EVALUATION_X;
+  EVALUATION_ATTR.origin_y = EVALUATION_Y;
+
   enableAD();
 
   HAL_ADC_Start_DMA(adc, (uint32_t*) dma_values, 1);
+
+  initialized = true;
 }
 
 uint16_t translate_y(uint16_t value) {
   return GRAPH_Y1 + GRAPH_Y2 - 1 - (value - MIN_Y) * (float) GRAPH_Y2 / (MAX_Y - MIN_Y);
 }
 
-void print_pulse(uint16_t pulse) {
-  char pulse_text[20];
-  sprintf(pulse_text, "%d", pulse);
-  ili9341_draw_string(ili9341_lcd, PULSE_TEXT_ATTR, pulse_text);
-}
-
 void print_result(pt_result_t *r) {
-  char text[20];
-  sprintf(text, "%d", r->rr_average);
-//  sprintf(text, "%d", r->is_qrs);
-  ili9341_draw_string(ili9341_lcd, PULSE_TEXT_ATTR, text);
+  if (r->evaluation > 0) {
+    ili9341_draw_string(ili9341_lcd, EVALUATION_ATTR, EVALUATION_TEXTS[r->evaluation == 1? 0 : 1]);
+  }
+  if (r->rr_average > 0) {
+    char text[6];
+    sprintf(text, "%-3d", RR_TO_PULSE((float) r->rr_average));
+    ili9341_draw_string(ili9341_lcd, PULSE_TEXT_ATTR, text);
+  }
 }
 
 void draw_menu() {
@@ -203,14 +197,14 @@ void display_graph() {
         }
 
         // draw raw signal
-        if (x == 0) {
-          ili9341_draw_pixel(ili9341_lcd, RAW_SIGNAL_COLOR, x, translate_y(raw_values[draw_index]));
-        }
-        else {
-          ili9341_draw_line(ili9341_lcd, RAW_SIGNAL_COLOR, x - 1, translate_y(raw_values[previous_draw_index]), x, translate_y(raw_values[draw_index]));
-        }
+//        if (x == 0) {
+//          ili9341_draw_pixel(ili9341_lcd, RAW_SIGNAL_COLOR, x, translate_y(raw_values[draw_index]));
+//        }
+//        else {
+//          ili9341_draw_line(ili9341_lcd, RAW_SIGNAL_COLOR, x - 1, translate_y(raw_values[previous_draw_index]), x, translate_y(raw_values[draw_index]));
+//        }
 
-        process_pan_tompkins(raw_values, filtered, integral, current_index, &result);
+        process_pan_tompkins(raw_values, filtered, current_index, &result);
 
         // draw filtered signal
         if (x == 0) {
@@ -219,42 +213,16 @@ void display_graph() {
         else {
           ili9341_draw_line(ili9341_lcd, FILTERED_SIGNAL_COLOR, x - 1, translate_y(FILTERED_DC_SHIFT(filtered[previous_draw_index])), x, translate_y(FILTERED_DC_SHIFT(filtered[draw_index])));
         }
-
-//        ili9341_color_t color = result.is_qrs ? QRS_COLOR : FILTERED_SIGNAL_COLOR;
-
-        // draw signals
-//        if (x == 0) {
-////          ili9341_draw_pixel(ili9341_lcd, ILI9341_MAGENTA, x, translate_y(FILTERED_DC_SHIFT(filtered[draw_index])));
-////          ili9341_draw_pixel(ili9341_lcd, ILI9341_CYAN, x, translate_y(DERIVATIVE_DC_SHIFT(squared_derivative[draw_index])));
-//  //        ili9341_draw_pixel(ili9341_lcd, ILI9341_YELLOW, x, translate_y(DERIVATIVE_DC_SHIFT(derivative[draw_index])));
-//          ili9341_draw_pixel(ili9341_lcd, color, x, translate_y(DC_SHIFT(integral[draw_index])));
-//        }
-//        else {
-////          ili9341_draw_line(ili9341_lcd, ILI9341_MAGENTA, x - 1, translate_y(FILTERED_DC_SHIFT(filtered[previous_draw_index])), x, translate_y(FILTERED_DC_SHIFT(filtered[draw_index])));
-////          ili9341_draw_line(ili9341_lcd, ILI9341_CYAN, x - 1, translate_y(DERIVATIVE_DC_SHIFT(squared_derivative[previous_draw_index])), x, translate_y(DERIVATIVE_DC_SHIFT(squared_derivative[draw_index])));
-//  //        ili9341_draw_line(ili9341_lcd, ILI9341_YELLOW, x - 1, translate_y(DERIVATIVE_DC_SHIFT(derivative[previous_draw_index])), x, translate_y(DERIVATIVE_DC_SHIFT(derivative[draw_index])));
-//          ili9341_draw_line(ili9341_lcd, color, x - 1, translate_y(DC_SHIFT(integral[previous_draw_index])), x, translate_y(DC_SHIFT(integral[draw_index])));
-//          ili9341_draw_pixel(ili9341_lcd, ILI9341_YELLOW, x, translate_y(DC_SHIFT(result.signalpeaki)));
-//          ili9341_draw_pixel(ili9341_lcd, ILI9341_LIGHTGREY, x, translate_y(DC_SHIFT(result.thi1)));
-//  //        ili9341_draw_pixel(ili9341_lcd, ILI9341_LIGHTGREY, x, translate_y(DC_SHIFT(result.derivative)));
-//          ili9341_draw_pixel(ili9341_lcd, ILI9341_RED, x, translate_y(DC_SHIFT(result.peaki)));
-//        }
         if (result.is_qrs) {
-          ili9341_draw_line(ili9341_lcd, ILI9341_RED, x, 10, x, 230);
+          ili9341_draw_line(ili9341_lcd, ILI9341_RED, x, 210, x, 230);
         }
-//        print_result(&result);
-
-        if (result.rr_average > 0) {
-//          print_pulse(RR_TO_PULSE((float) result.rr_average));
-          print_pulse(result.rr_average);
-        }
+        print_result(&result);
       }
       current_index++;
 //      rotary_index = rotary_index % ili9341_lcd->screen_size.width;
 //      ili9341_draw_line(ili9341_lcd, ILI9341_CYAN, rotary_index, 1, rotary_index, rotary_values[rotary_index] % 240);
 //      rotary_index++;
     }
-//    ili9341_draw_line(ili9341_lcd, ILI9341_CYAN, 0, rotary_position, 99, rotary_position);
     if (mode == MENU) {
       draw_menu();
     }
@@ -312,6 +280,9 @@ void display_handle_rotary_change(int32_t value) {
 }
 
 void display_handle_button_press() {
+  if (!initialized) {
+    return;
+  }
   if (mode == MEASURE) {
       mode = MENU;
     }

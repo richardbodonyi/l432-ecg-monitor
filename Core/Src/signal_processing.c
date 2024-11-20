@@ -157,8 +157,6 @@
 #define WINDOW_SIZE 30   // Integrator window size, in samples. The article recommends 150ms. So, SAMPLING_FREQUENCY*0.15.
             // However, you should check empirically if the waveform looks ok.
 
-//#define HIGHPASS_INTEGRAL_DELAY 7    // The delay between the filtered sample and the integral. volt már 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
-
 #define MOD_INDEX(x) ((x + BUFFER_SIZE) % BUFFER_SIZE)
 
 #define DELAY_200ms_IN_SAMPLES 40 // SAMPLING_FREQUENCY / 5
@@ -177,10 +175,10 @@ int16_t dcblock[BUFFER_SIZE] = {0};
 float lowpass[BUFFER_SIZE] = {0},
   highpass[BUFFER_SIZE] = {0},
   derivative[BUFFER_SIZE] = {0},
-  squared_derivative[BUFFER_SIZE] = {0};
-//  integral[BUFFER_SIZE] = {0};
+  squared_derivative[BUFFER_SIZE] = {0},
+  integral[BUFFER_SIZE] = {0};
 
-// i and j are iterators for loops.
+// i, j and k are iterators for loops.
 // sample counts how many samples have been read so far.
 // lastQRS stores which was the last sample read when the last R sample was triggered.
 // lastSlope stores the value of the squared slope when the last R sample was triggered.
@@ -192,14 +190,14 @@ int32_t sample = 0, lastQRS = 0;
 
 float lastSlope = 0, currentSlope = 0;
 
-// rr1 holds the last 8 RR intervals. rr2 holds the last 8 RR intervals between rrlow and rrhigh.
+// rr1 holds the last MAX_RR_AVERAGE_INDEX + 1 RR intervals. rr2 holds the last MAX_RR_AVERAGE_INDEX + 1 RR intervals between rrlow and rrhigh.
 // rravg1 is the rr1 average, rr2 is the rravg2. rrlow = 0.92*rravg2, rrhigh = 1.08*rravg2 and rrmiss = 1.16*rravg2.
 // rrlow is the lowest RR-interval considered normal for the current_index heart beat, while rrhigh is the highest.
 // rrmiss is the longest that it would be expected until a new QRS is detected. If none is detected for such
 // a long interval, the thresholds must be adjusted.
-uint16_t rr1[8], rr2[8], rravg1, rravg2, rrlow = 0, rrhigh = 200, rrmiss = 0, max_index;
+uint16_t rr1[MAX_RR_AVERAGE_INDEX + 1], rr2[MAX_RR_AVERAGE_INDEX + 1], rravg1, rravg2, rrlow = 100, rrhigh = 200, rrmiss = 0, max_index;
 
-uint32_t rr_count = 0, last_rr_average_index = 0;
+uint16_t rr_count = 0, last_rr_average_index = 0;
 
 // There are the variables from the original Pan-Tompkins algorithm.
 // The ones ending in _i correspond to values from the integrator.
@@ -229,21 +227,13 @@ bool regular = true, prevRegular;
     shorter comments below.
     The output is a buffer where we can change a previous result (using a back search) before outputting.
 */
-void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, uint32_t current_index, pt_result_t* result) {
+void process_pan_tompkins(uint16_t* signal, float* filtered, uint32_t current_index, pt_result_t* result) {
 
   // This variable is used as an index to work with the signal buffers. If the buffers still aren't
   // completely filled, it shows the last filled position. Once the buffers are full, it'll always
   // show the last position, and new samples will make the buffers shift, discarding the oldest
   // sample and storing the newest one on the last position.
   uint32_t array_index = MOD_INDEX(current_index);
-
-//  float* highpass = lowpass;
-
-  // Initializing the RR averages
-  for (i = 0; i < 8; i++) {
-      rr1[i] = 0;
-      rr2[i] = 0;
-  }
 
   sample = current_index + 1l;
   // DC Block filter
@@ -299,8 +289,13 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
   }
   integral[array_index] /= WINDOW_SIZE;
 
-  // Decision making.
   result->is_qrs = false;
+
+  if (current_index < 600) {
+    return;
+  }
+
+  // Decision making.
 
   float integral_value = integral[array_index], highpass_value = highpass[array_index];
 
@@ -385,32 +380,33 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
       // Add the newest RR-interval to the buffer and get the new average.
       rravg1 = 0;
       max_index = last_rr_average_index;
-      for (i = MAX_RR_AVERAGE_INDEX - max_index; i < MAX_RR_AVERAGE_INDEX; i++) {
+      for (i = 0; i < MAX_RR_AVERAGE_INDEX; i++) {
         rr1[i] = rr1[i + 1];
         rravg1 += rr1[i];
       }
-      rr1[7] = sample - lastQRS;
-      rravg1 += rr1[7] * 2;
-      rravg1 /= max_index + 2;
+      rr1[MAX_RR_AVERAGE_INDEX] = sample - lastQRS;
+      rravg1 += rr1[MAX_RR_AVERAGE_INDEX];
+      rravg1 /= max_index + 1;
 
       // If the newly-discovered RR-average is normal, add it to the "normal" buffer and get the new "normal" average.
       // Update the "normal" beat parameters.
-      if (rr1[max_index] >= rrlow && rr1[max_index] <= rrhigh) {
+      if (rr1[MAX_RR_AVERAGE_INDEX] >= rrlow && rr1[MAX_RR_AVERAGE_INDEX] <= rrhigh) {
         rravg2 = 0;
-        for (i = MAX_RR_AVERAGE_INDEX - max_index; i < MAX_RR_AVERAGE_INDEX; i++) {
+        for (i = 0; i < MAX_RR_AVERAGE_INDEX; i++) {
           rr2[i] = rr2[i + 1];
           rravg2 += rr2[i];
         }
-        rr2[7] = rr1[7];
-        rravg2 += rr2[7] * 2;
-        rravg2 /= max_index + 2;
+        rr2[MAX_RR_AVERAGE_INDEX] = rr1[MAX_RR_AVERAGE_INDEX];
+        rravg2 += rr2[MAX_RR_AVERAGE_INDEX];
+        rravg2 /= max_index + 1;
+
         rrlow = 0.92 * rravg2;
         rrhigh = 1.16 * rravg2;
         rrmiss = 1.66 * rravg2;
       }
 
       prevRegular = regular;
-      if (rravg1 == rravg2) {
+      if (rravg1 <= rravg2+2 && rravg1 >= rravg2-2) {
         regular = true;
       }
       // If the beat had been normal but turned odd, change the thresholds.
@@ -425,7 +421,9 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
         last_rr_average_index++;
       }
       result->rr_average = rravg1;
+      result->rr_average2 = rravg2;
       result->is_regular = regular;
+      result->evaluation = regular ? 1 : 2;
     }
     else {
       rr_count++;
@@ -457,28 +455,27 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
             lastSlope = currentSlope;
             // If a signal peak was detected on the back search, the RR attributes must be updated.
             // This is the same thing done when a peak is detected on the first try.
-            //RR Average 1
+            max_index = last_rr_average_index;
             rravg1 = 0;
-            for (j = 0; j < 7; j++) {
+            for (j = MAX_RR_AVERAGE_INDEX - max_index; j < MAX_RR_AVERAGE_INDEX; j++) {
               rr1[j] = rr1[j + 1];
               rravg1 += rr1[j];
             }
-            rr1[7] = k - 1 - lastQRS;
+            rr1[MAX_RR_AVERAGE_INDEX] = k - 1 - lastQRS;
             lastQRS = k - 1;
-            rravg1 += rr1[7];
-            rravg1 = rravg1 >> 3; // * 0.125
+            rravg1 += rr1[MAX_RR_AVERAGE_INDEX];
+            rravg1 /= max_index + 1;
             result->is_qrs = true;
 
-            //RR Average 2
-            if ((rr1[7] >= rrlow) && (rr1[7] <= rrhigh)) {
+            if (rr1[MAX_RR_AVERAGE_INDEX] >= rrlow && rr1[MAX_RR_AVERAGE_INDEX] <= rrhigh) {
               rravg2 = 0;
-              for (j = 0; j < 7; j++) {
+              for (j = MAX_RR_AVERAGE_INDEX - max_index; j < MAX_RR_AVERAGE_INDEX; j++) {
                 rr2[j] = rr2[j + 1];
                 rravg2 += rr2[j];
               }
-              rr2[7] = rr1[7];
-              rravg2 += rr2[7];
-              rravg2 = rravg2 >> 3; // * 0.125
+              rr2[MAX_RR_AVERAGE_INDEX] = rr1[MAX_RR_AVERAGE_INDEX];
+              rravg2 += rr2[MAX_RR_AVERAGE_INDEX];
+              rravg2 /= max_index + 1;
               rrlow = 0.92 * rravg2;
               rrhigh = 1.16 * rravg2;
               rrmiss = 1.66 * rravg2;
@@ -491,9 +488,13 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
             else {
               regular = false;
               if (prevRegular) {
-                threshold_i1 = 0.5 * threshold_i1; // 0.5 *
+                threshold_i1 = 0.5 * threshold_i1;
               }
             }
+            if (last_rr_average_index < MAX_RR_AVERAGE_INDEX) {
+              last_rr_average_index++;
+            }
+            lastQRS = sample;
             break;
           }
         }
@@ -548,7 +549,4 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
   result->signalpeaki = signalpeak_i;
   result->noisepeaki = noisepeak_i;
   result->thi1 = threshold_i1;
-  result->rr_averages = rr1;
-//  result->rr_average = rravg1;
-//  result->is_regular = regular;
 }
