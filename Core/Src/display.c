@@ -12,7 +12,7 @@
 
 #define MOD_INDEX(x) ((x + BUFFER_SIZE) % BUFFER_SIZE)
 
-#define RR_TO_PULSE(x) (60 * 200 / x)
+#define RR_TO_PULSE(x) (x != 0 ? (60 * 200 / x) : x)
 
 #define MAX_HEIGHT 239
 
@@ -26,7 +26,7 @@
 #define SEC_MOD 800
 #define HALF_SEC_MOD 400
 
-#define FILTERED_DC_SHIFT(X) ((X / 50) + 2000)
+#define FILTERED_DC_SHIFT(X) ((X / 500) + 2000)
 #define DERIVATIVE_DC_SHIFT(X) ((X / 10000) + 1500)
 #define DC_SHIFT(X) ((X / 1000000) + 2000)
 
@@ -35,6 +35,9 @@
 
 #define MIN_Y 700
 #define MAX_Y 3000
+
+#define PULSE_X 10
+#define PULSE_Y 12
 
 #define TEXT_COLOR ILI9341_LIGHTGREY
 #define TEXT_BACKGROUND ILI9341_BLACK
@@ -50,10 +53,6 @@
 char* EVALUATION_TEXTS[] = {"Normal", "Type1", "Type2"};
 
 char* MENU_TEXTS[] = {"Szunet", "Hang", "Vissza"};
-
-char* DEBUG_TEXTS[] = {"< 0", "<= 1000" ">1000", ">2000", ">3000", ">4000"};
-
-char DEBUG_TEXT[20];
 
 typedef enum {
   MEASURE = 0,
@@ -78,8 +77,6 @@ uint32_t time_buffer[BUFFER_SIZE] = {0};
 
 float filtered[BUFFER_SIZE] = {0};
 
-//float squared_derivative[BUFFER_SIZE] = {0};
-
 float integral[BUFFER_SIZE] = {0};
 
 uint32_t fill_index = 0;
@@ -100,39 +97,18 @@ int16_t rotary_position = 0;
 
 const uint8_t MIN_BRIGHTNESS = 80, MAX_BRIGHTNESS = 250, BRIGHTNESS_STEP = 10;
 
-ili9341_text_attr_t MENU_TEXT_ATTR;
+ili9341_text_attr_t MENU_TEXT_ATTR, PULSE_TEXT_ATTR;
 
-ili9341_text_attr_t PULSE_TEXT_ATTR;
-
-char* get_debug_text(uint32_t index) {
-  if (index > 4000) {
-    return DEBUG_TEXTS[5];
-  }
-  else if (index > 3000) {
-    return DEBUG_TEXTS[4];
-  }
-  else if (index > 2000) {
-    return DEBUG_TEXTS[3];
-  }
-  else if (index > 1000) {
-    return DEBUG_TEXTS[2];
-  }
-//  else if (index < 0) {
-//    return DEBUG_TEXTS[0];
-//  }
-  return DEBUG_TEXTS[1];
-}
-
-void print_debug_info(uint32_t value) {
-  ili9341_text_attr_t attr;
-  attr.bg_color = TEXT_BACKGROUND;
-  attr.fg_color = TEXT_COLOR;
-  attr.font = &ili9341_font_11x18;
-  attr.origin_x = 100;
-  attr.origin_y = 12;
-  sprintf(DEBUG_TEXT, "%ld", value);
-  ili9341_draw_string(ili9341_lcd, attr, DEBUG_TEXT);
-}
+//void print_debug_info(uint32_t value) {
+//  ili9341_text_attr_t attr;
+//  attr.bg_color = TEXT_BACKGROUND;
+//  attr.fg_color = TEXT_COLOR;
+//  attr.font = &ili9341_font_11x18;
+//  attr.origin_x = 100;
+//  attr.origin_y = 12;
+//  sprintf(DEBUG_TEXT, "%ld", value);
+//  ili9341_draw_string(ili9341_lcd, attr, DEBUG_TEXT);
+//}
 
 void init_display(SPI_HandleTypeDef* spi,
     TIM_HandleTypeDef* timer,
@@ -172,8 +148,8 @@ void init_display(SPI_HandleTypeDef* spi,
   PULSE_TEXT_ATTR.bg_color = TEXT_BACKGROUND;
   PULSE_TEXT_ATTR.fg_color = TEXT_COLOR;
   PULSE_TEXT_ATTR.font = &ili9341_font_11x18;
-  PULSE_TEXT_ATTR.origin_x = 260;
-  PULSE_TEXT_ATTR.origin_y = 12;
+  PULSE_TEXT_ATTR.origin_x = PULSE_X;
+  PULSE_TEXT_ATTR.origin_y = PULSE_Y;
 
   enableAD();
 
@@ -190,8 +166,14 @@ void print_pulse(uint16_t pulse) {
   ili9341_draw_string(ili9341_lcd, PULSE_TEXT_ATTR, pulse_text);
 }
 
+void print_result(pt_result_t *r) {
+  char text[20];
+  sprintf(text, "%d", r->rr_average);
+//  sprintf(text, "%d", r->is_qrs);
+  ili9341_draw_string(ili9341_lcd, PULSE_TEXT_ATTR, text);
+}
+
 void draw_menu() {
-  // return;
   uint8_t x = 10, y = 10;
   for (uint8_t i = 0; i < MENU_SIZE; i++) {
     MENU_TEXT_ATTR.bg_color = menu.selected == i ? HIGHLIGHTED_TEXT_BACKGROUND : TEXT_BACKGROUND;
@@ -230,6 +212,7 @@ void display_graph() {
 
         process_pan_tompkins(raw_values, filtered, integral, current_index, &result);
 
+        // draw filtered signal
         if (x == 0) {
           ili9341_draw_pixel(ili9341_lcd, FILTERED_SIGNAL_COLOR, x, translate_y(FILTERED_DC_SHIFT(filtered[draw_index])));
         }
@@ -259,9 +242,11 @@ void display_graph() {
         if (result.is_qrs) {
           ili9341_draw_line(ili9341_lcd, ILI9341_RED, x, 10, x, 230);
         }
+//        print_result(&result);
 
         if (result.rr_average > 0) {
-          print_pulse(RR_TO_PULSE((float) result.rr_average));
+//          print_pulse(RR_TO_PULSE((float) result.rr_average));
+          print_pulse(result.rr_average);
         }
       }
       current_index++;

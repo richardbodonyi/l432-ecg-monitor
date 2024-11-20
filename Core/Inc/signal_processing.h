@@ -16,11 +16,9 @@ typedef struct {
   float noisepeaki;
   float thi1;
   bool is_qrs;
-  bool is_noise_peak;
   uint16_t rr_average;
   bool is_regular;
-  float derivative;
-  float squared_derivative;
+  uint16_t *rr_averages;
 } pt_result_t;
 
 void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, uint32_t current_index, pt_result_t* result);

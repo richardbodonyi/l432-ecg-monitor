@@ -167,7 +167,9 @@
 
 #define DELAY_2s_IN_SAMPLES 400
 
-//#define DELAYED_INDEX(x) ((x + HIGHPASS_INTEGRAL_DELAY + BUFFER_SIZE) % BUFFER_SIZE)
+#define MAX_RR_AVERAGE_INDEX 7
+
+#define RR_INTERVALS_TO_SKIP 7
 
 // The signal array is where the most recent samples are kept. The other arrays are the outputs of each
 // filtering module: DC Block, low pass, high pass, integral etc.
@@ -195,7 +197,9 @@ float lastSlope = 0, currentSlope = 0;
 // rrlow is the lowest RR-interval considered normal for the current_index heart beat, while rrhigh is the highest.
 // rrmiss is the longest that it would be expected until a new QRS is detected. If none is detected for such
 // a long interval, the thresholds must be adjusted.
-uint16_t rr1[8], rr2[8], rravg1, rravg2, rrlow = 0, rrhigh = 200, rrmiss = 0, non_zero_rrs;
+uint16_t rr1[8], rr2[8], rravg1, rravg2, rrlow = 0, rrhigh = 200, rrmiss = 0, max_index;
+
+uint32_t rr_count = 0, last_rr_average_index = 0;
 
 // There are the variables from the original Pan-Tompkins algorithm.
 // The ones ending in _i correspond to values from the integrator.
@@ -219,8 +223,6 @@ float peak_i = 0,
 // prevRegular tells whether the heart beat was regular before the newest RR-interval was calculated.
 bool regular = true, prevRegular;
 
-uint32_t beat_count = 0;
-
 /*
     This is the actual QRS-detecting function. It's a loop that constantly calls the input and output functions
     and updates the thresholds and averages until there are no more samples. More details both above and in
@@ -243,150 +245,90 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
       rr2[i] = 0;
   }
 
-  // The main loop where everything proposed in the paper happens. Ends when there are no more signal samples.
-//  do {
-        // Test if the buffers are full.
-        // If they are, shift them, discarding the oldest sample and adding the new one at the end.
-        // Else, just put the newest sample in the next free position.
-        // Update 'current_index' so that the program knows where's the newest sample.
+  sample = current_index + 1l;
+  // DC Block filter
+  // This was not proposed on the original paper.
+  // It is not necessary and can be removed if your sensor or database has no DC noise.
+  if (current_index >= 1) {
+    dcblock[array_index] = signal[array_index] - signal[MOD_INDEX(array_index - 1l)] + 0.995 * dcblock[MOD_INDEX(array_index - 1l)];
+  }
+  else {
+    dcblock[array_index] = 0;
+  }
 
-//    if (sample >= BUFFER_SIZE) {
-//      for (i = 0; i < BUFFER_SIZE - 1; i++) {
-//        signal[i] = signal[i + 1];
-//        dcblock[i] = dcblock[i + 1];
-//        lowpass[i] = lowpass[i + 1];
-//        highpass[i] = highpass[i + 1];
-//        derivative[i] = derivative[i + 1];
-//        squared_derivative[i] = squared_derivative[i + 1];
-//        integral[i] = integral[i + 1];
-//        qrs_series[i] = qrs_series[i + 1];
-//      }
-//      current_index = BUFFER_SIZE - 1;
-//    }
-//    else {
-//      current_index = sample;
-//    }
-//    signal[current_index] = input();
+  // Low Pass filter
+  // Implemented as proposed by the original paper.
+  // y(nT) = 2y(nT - T) - y(nT - 2T) + x(nT) - 2x(nT - 6T) + x(nT - 12T)
+  // Can be removed if your signal was previously filtered, or replaced by a different filter.
+  lowpass[array_index] = dcblock[array_index];
+  lowpass[array_index] += 2 * lowpass[MOD_INDEX(array_index - 1)];
+  lowpass[array_index] -= lowpass[MOD_INDEX(array_index - 2)];
+  lowpass[array_index] -= 2 * dcblock[MOD_INDEX(array_index - 6)];
+  lowpass[array_index] += dcblock[MOD_INDEX(array_index - 12)];
 
-    // If no sample was read, stop processing!
-//    if (signal[current_index] == NOSAMPLE)
-//      break;
-//    current_index = sample;
-//    sample++; // Update sample counter
-    sample = current_index + 1l;
-    // DC Block filter
-    // This was not proposed on the original paper.
-    // It is not necessary and can be removed if your sensor or database has no DC noise.
-    if (current_index >= 1) {
-      dcblock[array_index] = signal[array_index] - signal[MOD_INDEX(array_index - 1l)] + 0.995 * dcblock[MOD_INDEX(array_index - 1l)];
-    }
-    else {
-      dcblock[array_index] = 0;
-    }
+  // High Pass filter
+  // Implemented as proposed by the original paper.
+  // y(nT) = 32x(nT - 16T) - [y(nT - T) + x(nT) - x(nT - 32T)]
+  // Can be removed if your signal was previously filtered, or replaced by a different filter.
+  highpass[array_index] = -lowpass[array_index];
+  highpass[array_index] -= highpass[MOD_INDEX(array_index - 1)];
+  highpass[array_index] += 32 * lowpass[MOD_INDEX(array_index - 16)];
+  highpass[array_index] += lowpass[MOD_INDEX(array_index - 32)];
 
-    // Low Pass filter
-    // Implemented as proposed by the original paper.
-    // y(nT) = 2y(nT - T) - y(nT - 2T) + x(nT) - 2x(nT - 6T) + x(nT - 12T)
-    // Can be removed if your signal was previously filtered, or replaced by a different filter.
-    lowpass[array_index] = dcblock[array_index];
-    lowpass[array_index] += 2 * lowpass[MOD_INDEX(array_index - 1)];
-    lowpass[array_index] -= lowpass[MOD_INDEX(array_index - 2)];
-    lowpass[array_index] -= 2 * dcblock[MOD_INDEX(array_index - 6)];
-    lowpass[array_index] += dcblock[MOD_INDEX(array_index - 12)];
-    filtered[array_index] = lowpass[array_index];
+  filtered[array_index] = highpass[array_index];
 
-    // High Pass filter
-    // Implemented as proposed by the original paper.
-    // y(nT) = 32x(nT - 16T) - [y(nT - T) + x(nT) - x(nT - 32T)]
-    // Can be removed if your signal was previously filtered, or replaced by a different filter.
-    highpass[array_index] = -lowpass[array_index];
-    highpass[array_index] -= highpass[MOD_INDEX(array_index - 1)];
-    highpass[array_index] += 32 * lowpass[MOD_INDEX(array_index - 16)];
-    highpass[array_index] += lowpass[MOD_INDEX(array_index - 32)];
+  // Derivative filter
+  // This is an alternative implementation, the central difference method.
+  // f'(a) = [f(a+h) - f(a-h)]/2h
+  // The original formula used by Pan-Tompkins was:
+  // y(nT) = (1/8T)[-x(nT - 2T) - 2x(nT - T) + 2x(nT + T) + x(nT + 2T)]
+  derivative[array_index] = highpass[array_index] - highpass[MOD_INDEX(array_index - 1l)];
 
-//    filtered[array_index] = highpass[array_index];
+  // This just squares the derivative, to get rid of negative values and emphasize high frequencies.
+  // y(nT) = [x(nT)]^2.
+  squared_derivative[array_index] = derivative[array_index] * derivative[array_index];
 
-    // Derivative filter
-    // This is an alternative implementation, the central difference method.
-    // f'(a) = [f(a+h) - f(a-h)]/2h
-    // The original formula used by Pan-Tompkins was:
-    // y(nT) = (1/8T)[-x(nT - 2T) - 2x(nT - T) + 2x(nT + T) + x(nT + 2T)]
-    derivative[array_index] = highpass[array_index] - highpass[MOD_INDEX(array_index - 1l)];
-//    if (current_index > 0) {
-//      derivative[array_index] -= highpass[MOD_INDEX(array_index - 1l)];
-//    }
+  // Moving-Window Integration
+  // Implemented as proposed by the original paper.
+  // y(nT) = (1/N)[x(nT - (N - 1)T) + x(nT - (N - 2)T) + ... x(nT)]
+  // WINDOW_SIZE, in samples, must be defined so that the window is ~150ms.
 
-    // This just squares the derivative, to get rid of negative values and emphasize high frequencies.
-    // y(nT) = [x(nT)]^2.
-    squared_derivative[array_index] = derivative[array_index] * derivative[array_index];
+  integral[array_index] = 0;
+  for (i = 0; i < WINDOW_SIZE; i++) {
+    integral[array_index] += squared_derivative[MOD_INDEX(array_index - i)];
+  }
+  integral[array_index] /= WINDOW_SIZE;
 
-    // Moving-Window Integration
-    // Implemented as proposed by the original paper.
-    // y(nT) = (1/N)[x(nT - (N - 1)T) + x(nT - (N - 2)T) + ... x(nT)]
-    // WINDOW_SIZE, in samples, must be defined so that the window is ~150ms.
+  // Decision making.
+  result->is_qrs = false;
 
-    integral[array_index] = 0;
-    for (i = 0; i < WINDOW_SIZE; i++) {
-      integral[array_index] += squared_derivative[MOD_INDEX(array_index - i)];
-    }
-    integral[array_index] /= WINDOW_SIZE;
+  float integral_value = integral[array_index], highpass_value = highpass[array_index];
 
-    result->derivative = derivative[array_index];
-    result->squared_derivative = squared_derivative[array_index];
+  // If the array_index signal is above one of the thresholds (integral or filtered signal), it's a peak candidate.
+  if (integral_value >= threshold_i1 || highpass_value >= threshold_f1) {
+      peak_i = integral_value;
+      peak_f = highpass_value;
+  }
 
-    // Decision making.
-    result->is_qrs = false;
-    result->is_noise_peak = false;
-
-    float integral_value = integral[array_index], highpass_value = highpass[array_index];
-
-    // If the array_index signal is above one of the thresholds (integral or filtered signal), it's a peak candidate.
-    if (integral_value >= threshold_i1 || highpass_value >= threshold_f1) {
-        peak_i = integral_value;
-        peak_f = highpass_value;
-    }
-
-    // If both the integral and the signal are above their thresholds, they're probably signal peaks.
-    if (integral_value >= threshold_i1 && highpass_value >= threshold_f1) {
-      // There's a 200ms latency. If the new peak respects this condition, we can keep testing.
-      if (sample > lastQRS + DELAY_200ms_IN_SAMPLES) {
-          // If it respects the 200ms latency, but it doesn't respect the 360ms latency, we check the slope.
-        if (sample <= lastQRS + DELAY_360ms_IN_SAMPLES) {
-          // The squared slope is "M" shaped. So we have to check nearby samples to make sure we're really looking
-          // at its peak value, rather than a low one.
-          currentSlope = 0;
-          for (j = current_index - 10; j <= current_index; j++) {
-            k = MOD_INDEX(j);
-            if (squared_derivative[k] > currentSlope) {
-                currentSlope = squared_derivative[k];
-            }
-          }
-          if (currentSlope <= lastSlope / 2l) {
-            result->is_qrs = false;
-          }
-          else {
-            signalpeak_i = 0.125 * peak_i + 0.875 * signalpeak_i;
-            threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
-            threshold_i2 = 0.5 * threshold_i1;
-
-            signalpeak_f = 0.125 * peak_f + 0.875 * signalpeak_f;
-            threshold_f1 = noisepeak_f + 0.25 * (signalpeak_f - noisepeak_f);
-            threshold_f2 = 0.5 * threshold_f1;
-
-            lastSlope = currentSlope;
-            result->is_qrs = true;
-            lastQRS = sample;
+  // If both the integral and the signal are above their thresholds, they're probably signal peaks.
+  if (integral_value >= threshold_i1 && highpass_value >= threshold_f1) {
+    // There's a 200ms latency. If the new peak respects this condition, we can keep testing.
+    if (sample > lastQRS + DELAY_200ms_IN_SAMPLES) {
+        // If it respects the 200ms latency, but it doesn't respect the 360ms latency, we check the slope.
+      if (sample <= lastQRS + DELAY_360ms_IN_SAMPLES) {
+        // The squared slope is "M" shaped. So we have to check nearby samples to make sure we're really looking
+        // at its peak value, rather than a low one.
+        currentSlope = 0;
+        for (j = current_index - 10; j <= current_index; j++) {
+          k = MOD_INDEX(j);
+          if (squared_derivative[k] > currentSlope) {
+              currentSlope = squared_derivative[k];
           }
         }
-        // If it was above both thresholds and respects both latency periods, it certainly is an R peak.
+        if (currentSlope <= lastSlope / 2l) {
+          result->is_qrs = false;
+        }
         else {
-          currentSlope = 0;
-          for (j = current_index - 10; j <= current_index; j++) {
-            k = MOD_INDEX(j);
-            if (squared_derivative[k] > currentSlope) {
-                currentSlope = squared_derivative[k];
-            }
-          }
           signalpeak_i = 0.125 * peak_i + 0.875 * signalpeak_i;
           threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
           threshold_i2 = 0.5 * threshold_i1;
@@ -397,69 +339,98 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
 
           lastSlope = currentSlope;
           result->is_qrs = true;
-          lastQRS = sample;
         }
       }
-      // If the new peak doesn't respect the 200ms latency, it's noise. Update thresholds and move on to the next sample.
+      // If it was above both thresholds and respects both latency periods, it certainly is an R peak.
       else {
-        peak_i = integral_value;
-        noisepeak_i = 0.125 * peak_i + 0.875 * noisepeak_i;
+        currentSlope = 0;
+        for (j = current_index - 10; j <= current_index; j++) {
+          k = MOD_INDEX(j);
+          if (squared_derivative[k] > currentSlope) {
+              currentSlope = squared_derivative[k];
+          }
+        }
+        signalpeak_i = 0.125 * peak_i + 0.875 * signalpeak_i;
         threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
         threshold_i2 = 0.5 * threshold_i1;
 
-        peak_f = highpass_value;
-        noisepeak_f = 0.125 * peak_f + 0.875 * noisepeak_f;
+        signalpeak_f = 0.125 * peak_f + 0.875 * signalpeak_f;
         threshold_f1 = noisepeak_f + 0.25 * (signalpeak_f - noisepeak_f);
         threshold_f2 = 0.5 * threshold_f1;
 
-        result->is_qrs = false;
-        result->is_noise_peak = true;
+        lastSlope = currentSlope;
+        result->is_qrs = true;
       }
     }
+    // If the new peak doesn't respect the 200ms latency, it's noise. Update thresholds and move on to the next sample.
+    else {
+      peak_i = integral_value;
+      noisepeak_i = 0.125 * peak_i + 0.875 * noisepeak_i;
+      threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
+      threshold_i2 = 0.5 * threshold_i1;
+
+      peak_f = highpass_value;
+      noisepeak_f = 0.125 * peak_f + 0.875 * noisepeak_f;
+      threshold_f1 = noisepeak_f + 0.25 * (signalpeak_f - noisepeak_f);
+      threshold_f2 = 0.5 * threshold_f1;
+
+      result->is_qrs = false;
+    }
+  }
 
   // If a R-peak was detected, the RR-averages must be updated.
   if (result->is_qrs) {
-    // Add the newest RR-interval to the buffer and get the new average.
-    rravg1 = 0;
-    for (i = 0; i < 7; i++) {
-      rr1[i] = rr1[i + 1];
-      rravg1 += rr1[i];
-    }
-    rr1[7] = sample - lastQRS;
-    rravg1 += rr1[7];
-    rravg1 = rravg1 * 0.125;
-    lastQRS = sample;
-
-    // If the newly-discovered RR-average is normal, add it to the "normal" buffer and get the new "normal" average.
-    // Update the "normal" beat parameters.
-    if ((rr1[7] >= rrlow) && (rr1[7] <= rrhigh)) {
-      rravg2 = 0;
-      for (i = 0; i < 7; i++) {
-        rr2[i] = rr2[i + 1];
-        rravg2 += rr2[i];
+    // Skip the first RR intervals as there are incorrect ones that affect the average.
+    if (rr_count > RR_INTERVALS_TO_SKIP) {
+      // Add the newest RR-interval to the buffer and get the new average.
+      rravg1 = 0;
+      max_index = last_rr_average_index;
+      for (i = MAX_RR_AVERAGE_INDEX - max_index; i < MAX_RR_AVERAGE_INDEX; i++) {
+        rr1[i] = rr1[i + 1];
+        rravg1 += rr1[i];
       }
-      rr2[7] = rr1[7];
-      rravg2 += rr2[7];
-      rravg2 = rravg2 * 0.125;
-      rrlow = 0.92 * rravg2;
-      rrhigh = 1.16 * rravg2;
-      rrmiss = 1.66 * rravg2;
-    }
+      rr1[7] = sample - lastQRS;
+      rravg1 += rr1[7] * 2;
+      rravg1 /= max_index + 2;
 
-    prevRegular = regular;
-    if (rravg1 == rravg2) {
-      regular = true;
+      // If the newly-discovered RR-average is normal, add it to the "normal" buffer and get the new "normal" average.
+      // Update the "normal" beat parameters.
+      if (rr1[max_index] >= rrlow && rr1[max_index] <= rrhigh) {
+        rravg2 = 0;
+        for (i = MAX_RR_AVERAGE_INDEX - max_index; i < MAX_RR_AVERAGE_INDEX; i++) {
+          rr2[i] = rr2[i + 1];
+          rravg2 += rr2[i];
+        }
+        rr2[7] = rr1[7];
+        rravg2 += rr2[7] * 2;
+        rravg2 /= max_index + 2;
+        rrlow = 0.92 * rravg2;
+        rrhigh = 1.16 * rravg2;
+        rrmiss = 1.66 * rravg2;
+      }
+
+      prevRegular = regular;
+      if (rravg1 == rravg2) {
+        regular = true;
+      }
+      // If the beat had been normal but turned odd, change the thresholds.
+      else {
+        regular = false;
+        if (prevRegular) {
+          threshold_i1 *= 0.5;
+          threshold_f1 *= 0.5;
+        }
+      }
+      if (last_rr_average_index < MAX_RR_AVERAGE_INDEX) {
+        last_rr_average_index++;
+      }
+      result->rr_average = rravg1;
+      result->is_regular = regular;
     }
-    // If the beat had been normal but turned odd, change the thresholds.
     else {
-      regular = false;
-      if (prevRegular) {
-        threshold_i1 *= 0.5;
-        threshold_f1 *= 0.5;
-      }
+      rr_count++;
     }
-    result->rr_average = rravg1;
-    result->is_regular = regular;
+    lastQRS = sample;
   }
   // If no R-peak was detected, it's important to check how long it's been since the last detection.
   else {
@@ -468,14 +439,14 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
     if (false && sample > (lastQRS + DELAY_200ms_IN_SAMPLES)) {
       for (k = lastQRS - 1 + DELAY_200ms_IN_SAMPLES; k < current_index; k++) {
         i = MOD_INDEX(k);
-        if ((integral[i] > threshold_i2) && highpass[i] > threshold_f1) {
+        if (integral[i] > threshold_i2 && highpass[i] > threshold_f1) {
           currentSlope = 0;
           for (j = i - 10; j <= i; j++) {
             if (squared_derivative[MOD_INDEX(j)] > currentSlope) {
                 currentSlope = squared_derivative[MOD_INDEX(j)];
             }
           }
-          if ((currentSlope < (lastSlope / 2l)) && (i + sample) < (lastQRS + 0.36 * lastQRS)) { // TODO miért 2?
+          if (currentSlope < (lastSlope / 2l) && (i + sample) < (lastQRS + 0.36 * lastQRS)) { // TODO miért 2?
               result->is_qrs = false;
           }
           else {
@@ -488,7 +459,6 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
             // This is the same thing done when a peak is detected on the first try.
             //RR Average 1
             rravg1 = 0;
-            non_zero_rrs = 0;
             for (j = 0; j < 7; j++) {
               rr1[j] = rr1[j + 1];
               rravg1 += rr1[j];
@@ -559,12 +529,11 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
       noisepeak_i = 0.125 * peak_i + 0.875 * noisepeak_i;
       threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
       threshold_i2 = 0.5 * threshold_i1;
+
       peak_f = highpass_value;
       noisepeak_f = 0.125 * peak_f + 0.875 * noisepeak_f;
       threshold_f1 = noisepeak_f + 0.25 * (signalpeak_f - noisepeak_f);
       threshold_f2 = 0.5 * threshold_f1;
-      result->is_qrs = false;
-      result->is_noise_peak = true;
     }
   }
 
@@ -579,260 +548,7 @@ void process_pan_tompkins(uint16_t* signal, float* filtered, float* integral, ui
   result->signalpeaki = signalpeak_i;
   result->noisepeaki = noisepeak_i;
   result->thi1 = threshold_i1;
+  result->rr_averages = rr1;
 //  result->rr_average = rravg1;
 //  result->is_regular = regular;
 }
-
-//void decision_making_extracted() {
-//  if ((integral_value >= threshold_i1)) {
-//    // There's a 200ms latency. If the new peak respects this condition, we can keep testing.
-//    if (sample > lastQRS + DELAY_200ms_IN_SAMPLES) {
-//        // If it respects the 200ms latency, but it doesn't respect the 360ms latency, we check the slope.
-//      if (sample <= lastQRS + DELAY_360ms_IN_SAMPLES) {
-//        // The squared slope is "M" shaped. So we have to check nearby samples to make sure we're really looking
-//        // at its peak value, rather than a low one.
-//        signalpeak_i = 0.125 * peak_i + 0.875 * signalpeak_i; // 0.125 *
-//        threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i); // 0.25 *
-//        threshold_i2 = 0.5 * threshold_i1;
-//        lastSlope = currentSlope;
-//        result->is_qrs = true;
-//        lastQRS = sample;
-//      }
-//      // If it was above both thresholds and respects both latency periods, it certainly is an R peak.
-//      else {
-//        signalpeak_i = 0.125 * peak_i + 0.875 * signalpeak_i; // 0.125 *
-//        threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i); // 0.25 *
-//        threshold_i2 = 0.5 * threshold_i1; // 0.5 *
-//        lastSlope = currentSlope;
-//        result->is_qrs = true;
-//        lastQRS = sample;
-//      }
-//    }
-//    // If the new peak doesn't respect the 200ms latency, it's noise. Update thresholds and move on to the next sample.
-//    else {
-//      peak_i = integral_value;
-//      noisepeak_i = 0.125 * peak_i + 0.875 * noisepeak_i;
-//      threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i);
-//      threshold_i2 = 0.5 * threshold_i1; // 0.5 *
-//      result->is_qrs = false;
-//      result->peaki = peak_i;
-//      result->signalpeaki = signalpeak_i;
-//      result->noisepeaki = noisepeak_i;
-//      result->thi1 = threshold_i1;
-//      return;
-//    }
-//  }
-//
-//  // If a R-peak was detected, the RR-averages must be updated.
-//  if (result->is_qrs) {
-//    // Add the newest RR-interval to the buffer and get the new average.
-//    rravg1 = 0;
-//    for (i = 0; i < 7; i++) {
-//      rr1[i] = rr1[i + 1];
-//      rravg1 += rr1[i];
-//    }
-//    rr1[7] = sample - lastQRS;
-//    rravg1 += rr1[7];
-//    rravg1 = rravg1 >> 3; // * 0.125
-//    lastQRS = sample;
-//
-//    // If the newly-discovered RR-average is normal, add it to the "normal" buffer and get the new "normal" average.
-//    // Update the "normal" beat parameters.
-//    if ((rr1[7] >= rrlow) && (rr1[7] <= rrhigh)) {
-//      rravg2 = 0;
-//      for (i = 0; i < 7; i++) {
-//        rr2[i] = rr2[i + 1];
-//        rravg2 += rr2[i];
-//      }
-//      rr2[7] = rr1[7];
-//      rravg2 += rr2[7];
-//      rravg2 = rravg2 >> 3; // * 0.125
-//      rrlow = 0.92 * rravg2;
-//      rrhigh = 1.16 * rravg2;
-//      rrmiss = 1.66 * rravg2;
-//    }
-//
-//    prevRegular = regular;
-//    if (rravg1 == rravg2) {
-//      regular = true;
-//    }
-//    // If the beat had been normal but turned odd, change the thresholds.
-//    else {
-//      regular = false;
-//      if (prevRegular) {
-//        threshold_i1 = 0.5 * threshold_i1; // 0.5 *
-//      }
-//    }
-//  }
-//  // If no R-peak was detected, it's important to check how long it's been since the last detection.
-//  else {
-//    // If no R-peak was detected for too long, use the lighter thresholds and do a back search.
-//    // However, the back search must respect the 200ms limit and the 360ms one (check the slope).
-//    if ( // ((sample - lastQRS) > (uint32_t)rrmiss) &&
-//        (sample > (lastQRS + DELAY_200ms_IN_SAMPLES))) {
-//      for (k = current_index - (sample - lastQRS) + DELAY_200ms_IN_SAMPLES; k < current_index; k++) {
-//        i = MOD_INDEX(k);
-//        if ((integral[i] > threshold_i2)
-//            ) {
-//            peak_i = integral[i];
-//            signalpeak_i = 0.25 * peak_i + 0.75 * signalpeak_i; // 0.25 *
-//            threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i); // 0.25 *
-//            threshold_i2 = 0.5 * threshold_i1; // 0.5 *
-//            lastSlope = currentSlope;
-//            // If a signal peak was detected on the back search, the RR attributes must be updated.
-//            // This is the same thing done when a peak is detected on the first try.
-//            //RR Average 1
-//            rravg1 = 0;
-//            for (j = 0; j < 7; j++) {
-//              rr1[j] = rr1[j + 1];
-//              rravg1 += rr1[j];
-//            }
-//            rr1[7] = sample - MOD_INDEX(array_index - i) - lastQRS;
-//            lastQRS = sample - MOD_INDEX(array_index - i);
-//            rravg1 += rr1[7];
-//            rravg1 = rravg1 >> 3; // * 0.125
-//            result->is_qrs = true;
-//
-//            //RR Average 2
-//            if ((rr1[7] >= rrlow) && (rr1[7] <= rrhigh)) {
-//              rravg2 = 0;
-//              for (i = 0; i < 7; i++) {
-//                rr2[i] = rr2[i + 1];
-//                rravg2 += rr2[i];
-//              }
-//              rr2[7] = rr1[7];
-//              rravg2 += rr2[7];
-//              rravg2 = rravg2 >> 3; // * 0.125
-//              rrlow = 0.92 * rravg2;
-//              rrhigh = 1.16 * rravg2;
-//              rrmiss = 1.66 * rravg2;
-//            }
-//
-//            prevRegular = regular;
-//            if (rravg1 == rravg2) {
-//              regular = true;
-//            }
-//            else {
-//              regular = false;
-//              if (prevRegular)
-//              {
-//                threshold_i1 = 0.5 * threshold_i1; // 0.5 *
-//              }
-//            }
-//            break;
-//        }
-//      }
-//      if (result->is_qrs) {
-//        result->is_regular = regular;
-//        result->peaki = peak_i;
-//        result->signalpeaki = signalpeak_i;
-//        result->noisepeaki = noisepeak_i;
-//        result->thi1 = threshold_i1;
-//        result->pulse = rravg1;
-//        return;
-//      }
-//    }
-//
-//    // Definitely no signal peak was detected.
-//    if (!result->is_qrs) {
-//      // If some kind of peak had been detected, then it's certainly a noise peak. Thresholds must be updated accordingly.
-//      if ((integral_value >= threshold_i1)) {
-//        peak_i = integral_value;
-//        noisepeak_i = 0.125 * peak_i + 0.875 * noisepeak_i; // 0.125 *
-//        threshold_i1 = noisepeak_i + 0.25 * (signalpeak_i - noisepeak_i); // 0.25 *
-//        threshold_i2 = 0.5 * threshold_i1; // 0.5 *
-//      }
-//    }
-//  }
-//  // The current_index implementation outputs '0' for every sample where no peak was detected,
-//  // and '1' for every sample where a peak was detected. It should be changed to fit
-//  // the desired application.
-//  // The 'if' accounts for the delay introduced by the filters: we only start outputting after the delay.
-//  // However, it updates a few samples back from the buffer. The reason is that if we update the detection
-//  // for the current_index sample, we might miss a peak that could've been found later by backsearching using
-//  // lighter thresholds. The final waveform output does match the original signal, though.
-//  result->peaki = peak_i;
-//  result->signalpeaki = signalpeak_i;
-//  result->noisepeaki = noisepeak_i;
-//  result->thi1 = threshold_i1;
-//  result->pulse = rravg1;
-//  result->is_regular = regular;
-//}
-
-
-/*
- * Select all the peaks that are at least 231ms apart from each other
- * Initialize the thresholds
- * for each Peak:
- *  if Peak > Threshold1:
- *    Classify it as R-peak
- *    Adjust SPK and NPK using Rule-1
- *  if number of detected beats > 8:
- *    Calculate the Mean RR-interval of the eight most recent beats
- *    Calculate current RR-interval
- *    if RR-interval < 360ms or RR-interval < 0.5 * Mean RR-interval:
- *      Classify it as T-wave or QRS complex based on slope
- *      Adjust SPK and NPK using Rule-1, if QRS complex found
- *    else if RR-interval > 1s or RR-interval > 1.66 * Mean RR-interval:
- *      Threshold3 = 0.5 * Threshold2 + 0.5 * MEANSB
- *      if Peak > Threshold3:
- *        Classify it as R-peak
- *        Adjust SPK and NPK using Rule-2
- *    else if RR-interval>1.4s:
- *      if Peak > 0.2 * Threshold2
- *        Classify it as R-peak
- *        Adjust SPK and NPK using Rule-2
- *    Threshold1 = NPK + 0.25 (SPK - NPK)
- *    Threshold2 = 0.4 * Threshold1
-*/
-//void pptp(uint32_t array_index, uint32_t sample_index, uint32_t* integral, int32_t* filtered, pt_result_t* result) {
-//  int32_t current_value = integral[array_index];
-//  // Initialize the thresholds
-//  threshold_i1 = noisepeak_i + ((signalpeak_i - noisepeak_i) >> 2); // 0.25 *
-//  threshold_i2 = threshold_i1;
-//
-//  // if last peak happened 230ms ago
-//  if (sample > (lastQRS + SAMPLING_FREQUENCY / 5)) {
-//    // if Peak > Threshold1
-//    if (current_value > threshold_i1) {
-//      peak_i = current_value;
-//      // Classify it as R-peak
-//      result->is_qrs = true;
-//      // Adjust SPK and NPK using Rule-1
-//      signalpeak_i = (peak_i >> 3) + 0.875 * signalpeak_i; // 0.125 *
-//      noisepeak_i = (peak_i >> 3) + 0.875 * noisepeak_i; // 0.125 *
-//
-//      beat_count++;
-//    }
-//  }
-//
-//  // if number of detected beats > 8:
-//  if (beat_count > 8) {
-//    //  Calculate the Mean RR-interval of the eight most recent beats
-//    //  Calculate current RR-interval
-//    //  if RR-interval < 360ms or RR-interval < 0.5 * Mean RR-interval:
-//    //    Classify it as T-wave or QRS complex based on slope
-//    //    Adjust SPK and NPK using Rule-1, if QRS complex found
-//    //  else if RR-interval > 1s or RR-interval > 1.66 * Mean RR-interval:
-//    //    Threshold3 = 0.5 * Threshold2 + 0.5 * MEANSB
-//    //    if Peak > Threshold3:
-//    //      Classify it as R-peak
-//    //      Adjust SPK and NPK using Rule-2
-//    //  else if RR-interval>1.4s:
-//    //    if Peak > 0.2 * Threshold2
-//    //      Classify it as R-peak
-//    //      Adjust SPK and NPK using Rule-2
-//    //  Threshold1 = NPK + 0.25 (SPK - NPK)
-//    //  Threshold2 = 0.4 * Threshold1
-//  }
-//
-////  threshold_i1 = noisepeak_i + ((signalpeak_i - noisepeak_i) >> 2); // 0.25 *
-////  threshold_i2 = threshold_i1;
-//
-//  result->peaki = peak_i;
-//  result->signalpeaki = signalpeak_i;
-//  result->noisepeaki = noisepeak_i;
-//  result->thi1 = threshold_i1;
-//  result->pulse = rravg1;
-//  result->is_regular = regular;
-//}
